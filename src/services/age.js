@@ -29,9 +29,17 @@ export function businessDayCount(startMs, endMs, businessDays = DEFAULT_DAYS) {
   return n;
 }
 
-/** Idade do card em dias úteis, da criação até `atMs`. */
+/**
+ * Idade do card em dias úteis. O DIA DA CRIAÇÃO conta como 0 — a contagem começa
+ * no dia seguinte. Ex.: criado hoje = 0; próximo dia útil = 1; etc. Fins de
+ * semana (fora de businessDays) não incrementam.
+ */
 export function cardAgeDays(createdAtMs, atMs, config) {
   if (createdAtMs == null) return 0;
   const bd = (config && config.businessDays) || DEFAULT_DAYS;
-  return businessDayCount(createdAtMs, atMs, bd);
+  // começa a contar no dia SEGUINTE ao da criação (criação = dia 0)
+  const start = new Date(createdAtMs);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() + 1);
+  return businessDayCount(start.getTime(), atMs, bd);
 }
