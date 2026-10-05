@@ -50,9 +50,12 @@ window.TrelloPowerUp.initialize({
 
   // Botão do quadro: buscar cards duplicados / parecidos
   'board-buttons': function (t) {
+    // Ícone de lupa embutido (data URI) — não depende de arquivo, sempre renderiza.
+    const mag = (c) => 'data:image/svg+xml,' + encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>`);
     return [{
-      icon: { dark: t.signUrl(ICON.searchLight), light: t.signUrl(ICON.search) },
-      text: 'Buscar duplicados',
+      icon: { dark: mag('#ffffff'), light: mag('#42526e') }, // dark=cabeçalho escuro, light=claro
+      text: '', // sem texto: só o ícone no topo do quadro
       callback: (tt) => tt.modal({
         title: 'Buscar duplicados',
         url: tt.signUrl('./views/duplicates.html'),
