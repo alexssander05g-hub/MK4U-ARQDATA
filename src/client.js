@@ -1,25 +1,22 @@
 /**
  * client.js — Power-Up "Contagem de Dias" (AUTOSSUFICIENTE, sem imports).
  *
- * Tudo que o conector precisa (cálculo de idade + leitura de config) está AQUI
- * dentro, de propósito: assim não há módulo externo que possa quebrar o
- * carregamento. Badges na frente/verso do card + botão "Duplicados" no quadro.
+ * Badge de IDADE em dias úteis na frente/verso do card + botão "Duplicados".
+ * - Dia da criação = 0; sobe no próximo dia útil; fins de semana não contam.
+ * - CONGELA quando o card é marcado como CONCLUÍDO (checkbox nativo do card,
+ *   campo dueComplete): o badge vira ✓ verde e o número para de subir.
  *
- * Regra de dias: o DIA DA CRIAÇÃO conta como 0; sobe no próximo dia útil.
- * Fins de semana (fora de businessDays) não contam. Nada é gravado por card.
+ * Nada é gravado por card. O "momento da conclusão" usa a ÚLTIMA ATIVIDADE do
+ * card (dateLastActivity) como referência — aproximação: se o card for editado
+ * depois de concluído, o número pode variar um pouco. Para precisão exata seria
+ * preciso gravar a data (o que evitamos aqui, por segurança dos dados).
  */
 
 const BADGE_REFRESH = 3600;
 const DEFAULT_DAYS = [1, 2, 3, 4, 5]; // seg..sex (0=dom)
 const CFG_KEY = 'cfg';
-const DEFAULT_CONFIG = {
-  businessDays: [1, 2, 3, 4, 5],
-  showBadge: true,
-  warnDays: 0,
-  alertDays: 0,
-};
+const DEFAULT_CONFIG = { businessDays: [1, 2, 3, 4, 5], showBadge: true, warnDays: 0, alertDays: 0 };
 
-// --- cálculo de idade (embutido) ---
 function creationMsFromId(id) {
   if (typeof id !== 'string' || id.length < 8) return null;
   const secs = parseInt(id.slice(0, 8), 16);
@@ -44,8 +41,6 @@ function cardAgeDays(createdAtMs, atMs, cfg) {
   start.setDate(start.getDate() + 1); // criação = dia 0
   return businessDayCount(start.getTime(), atMs, bd);
 }
-
-// --- config do quadro (embutido) ---
 function getConfig(t) {
   return t.get('board', 'shared', CFG_KEY).then((s) => ({
     ...DEFAULT_CONFIG,
@@ -54,11 +49,22 @@ function getConfig(t) {
       ? s.businessDays : DEFAULT_CONFIG.businessDays,
   }));
 }
-
 function colorFor(days, cfg) {
   if (cfg.alertDays && days >= cfg.alertDays) return 'red';
   if (cfg.warnDays && days >= cfg.warnDays) return 'yellow';
   return null;
+}
+
+/** Calcula {days, done} para um card, congelando na conclusão. */
+function ageOf(card, cfg) {
+  const created = creationMsFromId(card && card.id);
+  const done = !!(card && card.dueComplete);
+  let end = Date.now();
+  if (done) {
+    const la = card && card.dateLastActivity ? new Date(card.dateLastActivity).getTime() : NaN;
+    if (Number.isFinite(la)) end = la; // congela no momento (aprox.) da conclusão
+  }
+  return { days: cardAgeDays(created, end, cfg), done };
 }
 
 window.TrelloPowerUp.initialize({
@@ -67,8 +73,9 @@ window.TrelloPowerUp.initialize({
       if (!cfg.showBadge) return [];
       return [{
         dynamic: function () {
-          return t.card('id').then((card) => {
-            const days = cardAgeDays(creationMsFromId(card && card.id), Date.now(), cfg);
+          return t.card('id', 'dueComplete', 'dateLastActivity').then((card) => {
+            const { days, done } = ageOf(card, cfg);
+            if (done) return { text: `✓ ${days}d`, color: 'green', refresh: BADGE_REFRESH };
             return { text: `🗓 ${days}d`, color: colorFor(days, cfg), refresh: BADGE_REFRESH };
           });
         },
@@ -77,12 +84,12 @@ window.TrelloPowerUp.initialize({
   },
 
   'card-detail-badges': function (t) {
-    return t.card('id').then((card) => getConfig(t).then((cfg) => {
-      const days = cardAgeDays(creationMsFromId(card && card.id), Date.now(), cfg);
+    return t.card('id', 'dueComplete', 'dateLastActivity').then((card) => getConfig(t).then((cfg) => {
+      const { days, done } = ageOf(card, cfg);
       return [{
-        title: 'Idade',
+        title: done ? 'Idade (concluído)' : 'Idade',
         text: `${days} ${days === 1 ? 'dia útil' : 'dias úteis'}`,
-        color: colorFor(days, cfg),
+        color: done ? 'green' : colorFor(days, cfg),
       }];
     }));
   },
