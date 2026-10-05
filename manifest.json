@@ -1,0 +1,19 @@
+{
+  "name": "Contagem de Dias",
+  "details": "Mostra a idade de cada card em dias úteis, direto no card. Sem armazenar dados — a idade vem da data de criação do card.",
+  "author": "Alexssander",
+  "icon": {
+    "url": "./public/icons/icon.png"
+  },
+  "capabilities": [
+    "card-badges",
+    "card-detail-badges",
+    "board-buttons",
+    "show-settings"
+  ],
+  "connectors": {
+    "iframe": {
+      "url": "./index.html"
+    }
+  }
+}
