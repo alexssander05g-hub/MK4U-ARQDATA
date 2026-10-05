@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Configurações — Contagem de Dias</title>
+  <link rel="stylesheet" href="../src/styles/powerup.css" />
+  <script src="https://p.trellocdn.com/power-up.min.js"></script>
+  <script type="module" src="../src/views/settingsView.js"></script>
+</head>
+<body>
+  <div id="app" class="cd-app">
+    <div class="cd-field">
+      <span>Dias que contam</span>
+      <div class="cd-days">
+        <label><input type="checkbox" id="d1" />Seg</label>
+        <label><input type="checkbox" id="d2" />Ter</label>
+        <label><input type="checkbox" id="d3" />Qua</label>
+        <label><input type="checkbox" id="d4" />Qui</label>
+        <label><input type="checkbox" id="d5" />Sex</label>
+        <label><input type="checkbox" id="d6" />Sáb</label>
+        <label><input type="checkbox" id="d0" />Dom</label>
+      </div>
+    </div>
+
+    <label class="cd-check"><input type="checkbox" id="showBadge" /> Mostrar badge na frente do card</label>
+
+    <label class="cd-field cd-inline"><span>Amarelo a partir de (dias, 0 = desligado)</span><input type="number" id="warnDays" min="0" /></label>
+    <label class="cd-field cd-inline"><span>Vermelho a partir de (dias, 0 = desligado)</span><input type="number" id="alertDays" min="0" /></label>
+
+    <button id="saveBtn" class="cd-btn is-primary">Salvar</button>
+  </div>
+</body>
+</html>
