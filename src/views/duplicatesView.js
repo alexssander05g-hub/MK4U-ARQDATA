@@ -1,14 +1,14 @@
 /**
  * duplicatesView.js — painel "Buscar duplicados" (AUTOSSUFICIENTE, sem imports).
  *
- * Busca por nome + lista de possíveis duplicados (iguais e parecidos).
- * FILTRO DE ETIQUETAS: lista as etiquetas que existem no quadro; ao marcar uma,
- * os cards com aquela etiqueta são OCULTADOS da busca (ex.: "alteração 01"),
- * reduzindo o ruído. Nada é gravado — o filtro vale enquanto o painel está aberto.
+ * Busca por nome + possíveis duplicados (iguais e parecidos).
+ * FILTRO DE ETIQUETAS: recolhido por padrão (botão "Ocultar etiquetas"), abre
+ * numa caixa com ROLAGEM e um campo pra filtrar as etiquetas por nome. Ao marcar
+ * uma etiqueta, os cards que a têm somem da busca. Nada é gravado.
  */
 const t = window.TrelloPowerUp.iframe();
 
-// ---------- motor de comparação (embutido) ----------
+// ---------- motor (embutido) ----------
 function normalizeName(s) {
   return String(s == null ? '' : s)
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -34,18 +34,24 @@ function analyzeDuplicates(cards, opts = {}) {
   const maxSimilar = opts.maxSimilar == null ? 200 : opts.maxSimilar;
   const items = cards.map((c) => ({ id: c.id, name: c.name, idList: c.idList, norm: normalizeName(c.name) }))
     .filter((c) => c.norm.length > 0);
+  // exatos
   const byNorm = new Map();
   for (const it of items) { if (!byNorm.has(it.norm)) byNorm.set(it.norm, []); byNorm.get(it.norm).push(it); }
   const exact = [];
   for (const arr of byNorm.values()) if (arr.length >= 2) exact.push({ key: arr[0].norm, cards: arr });
   exact.sort((a, b) => b.cards.length - a.cards.length || a.key.localeCompare(b.key, 'pt-BR'));
+  // parecidos — comparados só dentro de "baldes" por prefixo (rápido mesmo com milhares de cards)
+  const buckets = new Map();
+  for (const it of items) { const k = it.norm.slice(0, 5); if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(it); }
   const similar = [];
-  for (let i = 0; i < items.length; i++) {
-    for (let j = i + 1; j < items.length; j++) {
-      const A = items[i].norm, B = items[j].norm; if (A === B) continue;
-      const mx = Math.max(A.length, B.length);
-      if (Math.abs(A.length - B.length) / mx > (1 - threshold)) continue;
-      const sc = similarity(A, B); if (sc >= threshold) similar.push({ a: items[i], b: items[j], score: sc });
+  for (const arr of buckets.values()) {
+    for (let i = 0; i < arr.length; i++) {
+      for (let j = i + 1; j < arr.length; j++) {
+        const A = arr[i].norm, B = arr[j].norm; if (A === B) continue;
+        const mx = Math.max(A.length, B.length);
+        if (Math.abs(A.length - B.length) / mx > (1 - threshold)) continue;
+        const sc = similarity(A, B); if (sc >= threshold) similar.push({ a: arr[i], b: arr[j], score: sc });
+      }
     }
   }
   similar.sort((x, y) => y.score - x.score);
@@ -58,9 +64,11 @@ function searchCards(cards, query) {
 
 // ---------- estado ----------
 let CARDS = [];
-let LIST = new Map();              // idList -> nome
-let LABELS = new Map();            // idLabel -> {id, name, color}
-const EXCLUDED = new Set();        // idLabels ocultados
+let LIST = new Map();
+let LABELS = new Map();            // id -> {id,name,color}
+const EXCLUDED = new Set();        // ids ocultados
+let LABELS_OPEN = false;
+let labelQuery = '';
 
 // ---------- helpers ----------
 function el(tag, props = {}, children = []) {
@@ -78,37 +86,35 @@ function el(tag, props = {}, children = []) {
 const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); };
 const listName = (id) => LIST.get(id) || '—';
 const openCard = (id) => { try { t.showCard(id); } catch (e) { /* noop */ } };
-
 const LABEL_HEX = { green: '#61bd4f', yellow: '#f2d600', orange: '#ff9f1a', red: '#eb5a46',
   purple: '#c377e0', blue: '#0079bf', sky: '#00c2e0', lime: '#51e898', pink: '#ff78cb', black: '#344563' };
 function labelHex(color) { const base = String(color || '').split('_')[0]; return LABEL_HEX[base] || '#b3bac5'; }
 function labelText(l) { return l.name && l.name.trim() ? l.name : `(${l.color || 'sem cor'})`; }
-
-// cards visíveis = sem nenhuma etiqueta excluída
 function cardExcluded(card) {
   if (EXCLUDED.size === 0) return false;
-  const labs = Array.isArray(card.labels) ? card.labels : [];
-  return labs.some((l) => EXCLUDED.has(l.id));
+  return (Array.isArray(card.labels) ? card.labels : []).some((l) => EXCLUDED.has(l.id));
 }
 function visibleCards() { return CARDS.filter((c) => !cardExcluded(c)); }
 
-// ---------- estilos próprios (injetados, pra não depender do CSS externo) ----------
 function injectStyles() {
   if (document.getElementById('dup-extra-css')) return;
   const s = document.createElement('style'); s.id = 'dup-extra-css';
   s.textContent = `
-    .dup-labels{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
-    .dup-labels .lbl-title{font-size:12px;color:#5e6c84;margin-right:2px}
-    .lbl-chip{display:inline-flex;align-items:center;gap:6px;border:1px solid #dfe1e6;border-radius:12px;
-      padding:3px 9px;font-size:12px;cursor:pointer;background:#fff;color:#172b4d;user-select:none}
+    .dup-labels-wrap{margin-top:8px}
+    .dup-labels-toggle{border:1px solid #dfe1e6;background:#fff;border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer;color:#172b4d}
+    .dup-labels-toggle:hover{background:#f4f5f7}
+    .dup-label-filter{width:100%;box-sizing:border-box;margin:8px 0 6px;padding:6px 9px;border:1px solid #dfe1e6;border-radius:4px;font-size:13px}
+    .dup-labels-panel{max-height:150px;overflow:auto;border:1px solid #dfe1e6;border-radius:6px;padding:8px;display:flex;flex-wrap:wrap;gap:6px;background:#fafbfc}
+    .dup-labels-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+    .lbl-chip{display:inline-flex;align-items:center;gap:6px;border:1px solid #dfe1e6;border-radius:12px;padding:3px 9px;font-size:12px;cursor:pointer;background:#fff;color:#172b4d;user-select:none}
     .lbl-chip .dot{width:10px;height:10px;border-radius:50%;flex:0 0 auto}
-    .lbl-chip.is-off{background:#f4f5f7;color:#97a0af;text-decoration:line-through;border-style:dashed}
+    .lbl-chip.is-off{background:#eaf3ff;border-color:#4c9aff;color:#0747a6}
     .lbl-hint{font-size:11px;color:#97a0af;margin-top:4px}
   `;
   document.head.appendChild(s);
 }
 
-// ---------- render ----------
+// ---------- render de resultados ----------
 function cardRow(c) {
   return el('div', { class: 'dup-card' }, [
     el('div', { class: 'dup-card-main' }, [
@@ -118,114 +124,118 @@ function cardRow(c) {
     el('button', { class: 'dup-open', text: 'Abrir', onclick: () => openCard(c.id) }),
   ]);
 }
-
 function renderResults(container, query) {
   clear(container);
   const cards = visibleCards();
-
   if (query && query.trim()) {
     const found = searchCards(cards, query);
     container.appendChild(el('div', { class: 'dup-section-title', text: `Resultados para "${query.trim()}" (${found.length})` }));
-    if (found.length === 0) {
-      container.appendChild(el('div', { class: 'dup-empty', text: 'Nenhum card com esse nome (entre os visíveis). Pode criar sem duplicar. ✅' }));
-      return;
-    }
+    if (found.length === 0) { container.appendChild(el('div', { class: 'dup-empty', text: 'Nenhum card com esse nome (entre os visíveis). Pode criar sem duplicar. ✅' })); return; }
     const qn = normalizeName(query);
-    found.map((c) => ({ c, s: similarity(qn, normalizeName(c.name)) }))
-      .sort((a, b) => b.s - a.s).forEach(({ c }) => container.appendChild(cardRow(c)));
+    found.map((c) => ({ c, s: similarity(qn, normalizeName(c.name)) })).sort((a, b) => b.s - a.s).forEach(({ c }) => container.appendChild(cardRow(c)));
     return;
   }
-
   const { exact, similar } = analyzeDuplicates(cards, { threshold: 0.82 });
-  if (exact.length === 0 && similar.length === 0) {
-    container.appendChild(el('div', { class: 'dup-empty', text: 'Nenhum card com nome igual ou parecido (entre os visíveis). Quadro limpo! ✅' }));
-    return;
-  }
+  if (exact.length === 0 && similar.length === 0) { container.appendChild(el('div', { class: 'dup-empty', text: 'Nenhum card com nome igual ou parecido (entre os visíveis). Quadro limpo! ✅' })); return; }
   if (exact.length > 0) {
     container.appendChild(el('div', { class: 'dup-section-title', text: `Nomes iguais (${exact.length} grupo(s))` }));
     exact.forEach((g) => {
       const box = el('div', { class: 'dup-group is-exact' }, [el('div', { class: 'dup-group-head', text: `${g.cards.length}× "${g.cards[0].name}"` })]);
-      g.cards.forEach((c) => box.appendChild(cardRow(c)));
-      container.appendChild(box);
+      g.cards.forEach((c) => box.appendChild(cardRow(c))); container.appendChild(box);
     });
   }
   if (similar.length > 0) {
     container.appendChild(el('div', { class: 'dup-section-title', text: `Nomes parecidos (${similar.length} par(es))` }));
     similar.forEach((pair) => {
       const box = el('div', { class: 'dup-group is-similar' }, [el('div', { class: 'dup-group-head', text: `${Math.round(pair.score * 100)}% parecidos` })]);
-      box.appendChild(cardRow(pair.a)); box.appendChild(cardRow(pair.b));
-      container.appendChild(box);
+      box.appendChild(cardRow(pair.a)); box.appendChild(cardRow(pair.b)); container.appendChild(box);
     });
   }
 }
 
-function labelFilterRow(onChange) {
-  const row = el('div', { class: 'dup-labels' });
-  if (LABELS.size === 0) return row; // nada a mostrar
-  row.appendChild(el('span', { class: 'lbl-title', text: 'Ocultar etiquetas:' }));
-  Array.from(LABELS.values())
-    .sort((a, b) => labelText(a).localeCompare(labelText(b), 'pt-BR'))
-    .forEach((l) => {
-      const chip = el('span', { class: `lbl-chip${EXCLUDED.has(l.id) ? ' is-off' : ''}`, title: 'Clique para ocultar/mostrar' }, [
-        el('span', { class: 'dot', style: `background:${labelHex(l.color)}` }),
-        labelText(l),
-      ]);
-      chip.addEventListener('click', () => {
-        if (EXCLUDED.has(l.id)) EXCLUDED.delete(l.id); else EXCLUDED.add(l.id);
-        onChange();
-      });
-      row.appendChild(chip);
-    });
-  return row;
+// ---------- render do filtro de etiquetas ----------
+function chip(l, isOff, onClick) {
+  const c = el('span', { class: `lbl-chip${isOff ? ' is-off' : ''}`, title: 'Clique para ocultar/mostrar os cards com esta etiqueta' }, [
+    el('span', { class: 'dot', style: `background:${labelHex(l.color)}` }),
+    (isOff ? '✓ ' : '') + labelText(l),
+  ]);
+  c.addEventListener('click', onClick);
+  return c;
 }
 
 function render() {
   const root = document.getElementById('app');
   clear(root);
 
-  const search = el('input', { type: 'search', class: 'dup-search',
-    placeholder: 'Digite o nome do projeto para conferir antes de criar…' });
+  const search = el('input', { type: 'search', class: 'dup-search', placeholder: 'Digite o nome do projeto para conferir antes de criar…' });
+  const labelsWrap = el('div', { class: 'dup-labels-wrap' });
+  const summary = el('div', { class: 'dup-summary' });
   const results = el('div', { class: 'dup-results' });
 
-  const rerun = () => {
-    const vis = visibleCards().length;
-    summary.textContent = `${CARDS.length} cards no quadro · ${vis} visível(is) após filtro de etiquetas`;
-    // re-renderiza a linha de etiquetas (para atualizar o estado dos chips) e os resultados
-    clear(labelsWrap); labelsWrap.appendChild(labelFilterRow(rerun));
+  const refreshResults = () => {
+    summary.textContent = `${CARDS.length} cards · ${visibleCards().length} visível(is) após filtro · ${EXCLUDED.size} etiqueta(s) oculta(s)`;
     renderResults(results, search.value);
   };
+  const toggleExcl = (id) => { if (EXCLUDED.has(id)) EXCLUDED.delete(id); else EXCLUDED.add(id); };
 
-  const summary = el('div', { class: 'dup-summary' });
-  const labelsWrap = el('div', {});
-  labelsWrap.appendChild(labelFilterRow(rerun));
+  const renderLabels = () => {
+    clear(labelsWrap);
+    if (LABELS.size === 0) return;
+    const btn = el('button', { class: 'dup-labels-toggle',
+      text: `${LABELS_OPEN ? '▾' : '▸'} Ocultar etiquetas${EXCLUDED.size ? ` (${EXCLUDED.size} oculta(s))` : ''}`,
+      onclick: () => { LABELS_OPEN = !LABELS_OPEN; renderLabels(); } });
+    labelsWrap.appendChild(btn);
+
+    // quando fechado: mostra só as etiquetas já ocultas (pra desfazer rápido)
+    if (!LABELS_OPEN && EXCLUDED.size) {
+      const row = el('div', { class: 'dup-labels-row' });
+      Array.from(EXCLUDED).map((id) => LABELS.get(id)).filter(Boolean)
+        .forEach((l) => row.appendChild(chip(l, true, () => { toggleExcl(l.id); renderLabels(); refreshResults(); })));
+      labelsWrap.appendChild(row);
+    }
+
+    // quando aberto: filtro por nome + caixa rolável com todas
+    if (LABELS_OPEN) {
+      const filter = el('input', { type: 'search', class: 'dup-label-filter', placeholder: 'filtrar etiquetas por nome…', value: labelQuery });
+      const panel = el('div', { class: 'dup-labels-panel' });
+      const fillPanel = () => {
+        clear(panel);
+        const q = normalizeName(labelQuery);
+        const arr = Array.from(LABELS.values())
+          .filter((l) => !q || normalizeName(labelText(l)).includes(q))
+          .sort((a, b) => labelText(a).localeCompare(labelText(b), 'pt-BR'));
+        if (!arr.length) { panel.appendChild(el('div', { class: 'lbl-hint', text: 'nenhuma etiqueta encontrada' })); return; }
+        arr.forEach((l) => panel.appendChild(chip(l, EXCLUDED.has(l.id), () => { toggleExcl(l.id); fillPanel(); btn.textContent = `▾ Ocultar etiquetas${EXCLUDED.size ? ` (${EXCLUDED.size} oculta(s))` : ''}`; refreshResults(); })));
+      };
+      filter.addEventListener('input', () => { labelQuery = filter.value; fillPanel(); });
+      labelsWrap.appendChild(filter);
+      labelsWrap.appendChild(panel);
+      fillPanel();
+    }
+  };
 
   search.addEventListener('input', () => renderResults(results, search.value));
 
-  const head = el('div', { class: 'dup-head' }, [search, labelsWrap, summary]);
-  if (LABELS.size > 0) head.appendChild(el('div', { class: 'lbl-hint', text: 'Dica: clique numa etiqueta para ocultar os cards que a têm (ex.: alterações).' }));
+  const head = el('div', { class: 'dup-head' }, [search, labelsWrap, summary,
+    el('div', { class: 'lbl-hint', text: 'Dica: abra "Ocultar etiquetas", marque as de alteração/revisão para tirá-las da busca.' })]);
   root.appendChild(head);
   root.appendChild(results);
 
-  rerun();
+  renderLabels();
+  refreshResults();
   setTimeout(() => search.focus(), 50);
 }
 
-// ---------- boot ----------
 async function boot() {
   const root = document.getElementById('app');
   try {
     injectStyles();
-    const [cards, lists] = await Promise.all([
-      t.cards('id', 'name', 'idList', 'labels'),
-      t.lists('id', 'name'),
-    ]);
+    const [cards, lists] = await Promise.all([t.cards('id', 'name', 'idList', 'labels'), t.lists('id', 'name')]);
     CARDS = cards;
     LIST = new Map(lists.map((l) => [l.id, l.name]));
     LABELS = new Map();
-    for (const c of cards) {
-      for (const l of (Array.isArray(c.labels) ? c.labels : [])) {
-        if (l && l.id && !LABELS.has(l.id)) LABELS.set(l.id, { id: l.id, name: l.name || '', color: l.color || '' });
-      }
+    for (const c of cards) for (const l of (Array.isArray(c.labels) ? c.labels : [])) {
+      if (l && l.id && !LABELS.has(l.id)) LABELS.set(l.id, { id: l.id, name: l.name || '', color: l.color || '' });
     }
     render();
   } catch (e) {
